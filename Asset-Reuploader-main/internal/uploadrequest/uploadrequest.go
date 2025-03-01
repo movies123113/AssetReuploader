@@ -79,6 +79,8 @@ func getUniverseId(placeId string) string {
 
 func New(rawUploadRequest RawUploadRequest) UploadRequest {
 	pId := rawUploadRequest.PlaceId
+	print(pId)
+	print(getUniverseId(pId))
 	return UploadRequest{
 		Ids:             rawUploadRequest.Ids,
 		DefaultPlaceIds: rawUploadRequest.DefaultPlaceIds,
