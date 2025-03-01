@@ -1,92 +1,80 @@
-package uploadrequest
+package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"strconv"
+	"time"
 
-	"github.com/movies123113/AssetReuploader/Asset-Reuploader-main/internal/api"
+	"github.com/movies123113/AssetReuploader/Asset-Reuploader-main/internal/app/animation"
+	"github.com/movies123113/AssetReuploader/Asset-Reuploader-main/internal/cache"
 	"github.com/movies123113/AssetReuploader/Asset-Reuploader-main/internal/client"
-	"github.com/movies123113/AssetReuploader/Asset-Reuploader-main/internal/retry"
+	"github.com/movies123113/AssetReuploader/Asset-Reuploader-main/internal/consoleutils"
+	"github.com/movies123113/AssetReuploader/Asset-Reuploader-main/internal/edittext"
+	"github.com/movies123113/AssetReuploader/Asset-Reuploader-main/internal/event"
+	"github.com/movies123113/AssetReuploader/Asset-Reuploader-main/internal/uploadrequest"
 )
 
-type RawUploadRequest struct {
-	PluginVersion string        `json:"pluginVersion"`
-	AssetType     string        `json:"assetType"`
-	Ids           []interface{} `json:"ids"`
-
-	CreatorId int64  `json:"creatorId"`
-	IsGroup   bool   `json:"isGroup"`
-	PlaceId   string `json:"placeId"`
-
-	DefaultPlaceIds []interface{} `json:"defaultPlaceIds"`
-	DebugMode       bool          `json:"debugMode"`
+var assetModules = map[string]func(uploadRequest uploadrequest.UploadRequest, pauseEvent *event.Event, debugMode bool){
+	"Animation": animation.Reupload,
 }
 
-type UploadRequest struct {
-	Ids             []interface{}
-	DefaultPlaceIds []interface{}
-	PlaceId         string
-	UniverseId      string
-	CreatorId       int64
-	IsGroup         bool
-}
+var finished bool
 
-type rawPlaceDetails struct {
-	UniverseId uint64 `json:"universeId"`
-}
+func handleUploadRequest(rawUploadRequest uploadrequest.RawUploadRequest) {
+	consoleutils.ClearScreen()
 
-func getUniverseId(placeId string) string {
-	cookie := client.Cookie.Get()
-	httpClient := http.Client{}
+	req := uploadrequest.New(rawUploadRequest)
+	pauseEvent := event.NewEvent()
+	start := time.Now()
 
-	req, err := http.NewRequest("GET", api.GetPlaceDetails([]string{placeId}), http.NoBody)
-	if err != nil {
-		log.Fatal(err)
+	fmt.Printf("PlaceId %s UniverseId %s", req.PlaceId, req.UniverseId)
+
+	if !client.Cookie.CanCollaborate(req.UniverseId) {
+		consoleutils.ClearScreen()
+		fmt.Println(edittext.Error + client.CookieCannotCollaborateError)
+		client.Cookie.PromptInputWithUniverseId(req.UniverseId)
 	}
-	req.AddCookie(&http.Cookie{
-		Name:  ".ROBLOSECURITY",
-		Value: cookie,
+
+	assetModules[rawUploadRequest.AssetType](req, pauseEvent, rawUploadRequest.DebugMode)
+
+	elapsed := time.Since(start)
+	fmt.Printf(edittext.Reset+"Reuploading took %d hours, %d minutes, and %d seconds.\n", int(elapsed.Hours()), int(elapsed.Minutes())%60, int(elapsed.Seconds())%60)
+	fmt.Println("Waiting for client to finish changing ids...")
+	finished = true
+}
+
+func newRouter(port int) {
+	// var savedResponses map[string]string
+	cache := cache.GetCache()
+
+	http.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		if cache.IsEmpty() && finished {
+			fmt.Fprint(w, "done")
+			finished = false
+			return
+		}
+
+		cache.EncodeJson(json.NewEncoder(w))
+		cache.Clear()
 	})
 
-	universeId, _ := retry.Do(
-		retry.NewOptions(
-			retry.MaxDelay(5),
-			retry.BackOff(2),
-		),
-		func() (string, error) {
-			resp, err := httpClient.Do(req)
-			if err != nil {
-				return "", err
-			}
+	http.HandleFunc("POST /upload", func(w http.ResponseWriter, r *http.Request) {
+		var rawUploadRequest uploadrequest.RawUploadRequest
+		json.NewDecoder(r.Body).Decode(&rawUploadRequest)
 
-			if resp.StatusCode == 200 {
-				var pDetails []rawPlaceDetails
-				if err := json.NewDecoder(resp.Body).Decode(&pDetails); err != nil {
-					log.Fatal(err)
-				}
+		if rawUploadRequest.PluginVersion != compatiblePluginVersion {
+			w.WriteHeader(409)
+			return
+		}
 
-				return strconv.FormatUint(pDetails[0].UniverseId, 10), nil
-			}
+		go handleUploadRequest(rawUploadRequest)
+		w.WriteHeader(200)
+	})
 
-			return "", retry.ContinueRetry
-		},
-	)
-
-	return universeId
-}
-
-func New(rawUploadRequest RawUploadRequest) UploadRequest {
-	pId := rawUploadRequest.PlaceId
-	print(pId)
-	print(getUniverseId(pId))
-	return UploadRequest{
-		Ids:             rawUploadRequest.Ids,
-		DefaultPlaceIds: rawUploadRequest.DefaultPlaceIds,
-		CreatorId:       rawUploadRequest.CreatorId,
-		IsGroup:         rawUploadRequest.IsGroup,
-		PlaceId:         pId,
-		UniverseId:      getUniverseId(pId),
+	if err := http.ListenAndServe(fmt.Sprintf(":%v", port), nil); err != nil {
+		log.Fatal(err)
 	}
 }
