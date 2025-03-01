@@ -29,6 +29,8 @@ func handleUploadRequest(rawUploadRequest uploadrequest.RawUploadRequest) {
 	pauseEvent := event.NewEvent()
 	start := time.Now()
 
+	fmt.Printf("PlaceId %s UniverseId %s", req.PlaceId, req.UniverseId)
+
 	if !client.Cookie.CanCollaborate(req.UniverseId) {
 		consoleutils.ClearScreen()
 		fmt.Println(edittext.Error + client.CookieCannotCollaborateError)
