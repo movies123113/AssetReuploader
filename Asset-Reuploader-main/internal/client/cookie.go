@@ -129,7 +129,46 @@ func (c cookieManager) PromptInput() {
 }
 
 func (c cookieManager) CanCollaborate(universeId string) bool {
-	return true
+	client := http.Client{}
+
+	req, err := http.NewRequest("GET", api.TeamCreateSettings(universeId), http.NoBody)
+	if err != nil {
+		log.Fatal(err)
+	}
+	req.AddCookie(&http.Cookie{
+		Name:  ".ROBLOSECURITY",
+		Value: clientCookie,
+	})
+
+	canCollaborate, err := retry.Do(
+		retry.NewOptions(
+			retry.Tries(3),
+			retry.MaxDelay(5),
+			retry.BackOff(1.5),
+		),
+
+		func() (bool, error) {
+			resp, err := client.Do(req)
+			if err != nil {
+				return false, retry.ContinueRetry
+			}
+			defer resp.Body.Close()
+
+			switch resp.StatusCode {
+			case 200:
+				return true, nil
+			case 401, 403:
+				return false, retry.ExitRetry
+			default:
+				return false, retry.ContinueRetry
+			}
+		},
+	)
+	if err != nil {
+		return false
+	}
+
+	return canCollaborate
 }
 
 func (c cookieManager) PromptInputWithUniverseId(universeId string) {
